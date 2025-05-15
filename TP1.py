@@ -136,7 +136,7 @@ def envoyer_donnees_vers_thingsboard(temperature, humidite):
         print(f"❌ Exception TB : {e}")
 
 # ========== Lecture du capteur ==========
-ef alarme(temperature):
+def alarme(temperature):
     """
     Active ou désactive l'alarme en fonction de la température mesurée.
     Lorsque la température dépasse 25°C, l'alarme s'active :
