@@ -134,6 +134,16 @@ def envoyer_donnees_vers_thingsboard(temperature, humidite):
         print("✅ Données envoyées à ThingsBoard" if response.status_code == 200 else f"❌ Erreur: {response.text}")
     except Exception as e:
         print(f"❌ Exception TB : {e}")
+        
+def lire_temperature_et_humidite():
+    for _ in range(3): 
+        try:
+            return dht_device.temperature, dht_device.humidity
+        except RuntimeError as e:
+            print(f"DHT11 erreur : {e}")
+            time.sleep(1)  
+    return None, None
+        
 
 # ========== Lecture du capteur ==========
 def alarme(temperature):
@@ -466,12 +476,18 @@ def mqtt_on_message(client, userdata, msg): # exemple de code prix depuis les do
 # MQTT client setup
 def lancer_client_mqtt():
     global client
+ 
     client = mqtt.Client(protocol=mqtt.MQTTv311)
     client.username_pw_set(THINGSBOARD_TOKEN)
     client.on_connect = mqtt_on_connect
     client.on_message = mqtt_on_message
     client.message_callback_add("v1/devices/me/attributes", mqtt_on_attribute_update)
-    client.loop_start()
+ 
+    try:
+        client.connect("thingsboard.cloud", 1883, 60)
+        client.loop_start()
+    except Exception as e:
+        print(f"Erreur lors de la connexion MQTT : {e}")
 
 
 # Aider par internet
@@ -524,6 +540,7 @@ def main():
     get_test_mode_from_thingsboard()
     mettre_a_jour_interface_mode_test()
     mettre_a_jour_affichage_manuel() 
+
 
     update_temp()
     window.mainloop()
