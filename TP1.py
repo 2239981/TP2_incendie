@@ -159,7 +159,7 @@ def alarme(temperature):
     """
     global alarme_active
 
-    if temperature >= 25:
+    if temperature >= 30:
         if not alarme_active:  # Si l'alarme n'était pas déjà activée
             alarme_active = True
             led.on()           # Allume la LED
@@ -268,7 +268,8 @@ def update_temp():
             if temperature is not None:
                 temp_valeur.config(text=f"{temperature}°C", fg="red")
                 alarme(temperature)
-                print(f"Donnees envoyees (manuel): Température: {temperature}°C")
+                enregistrer_donnees(temperature, humidite)
+                print(f"Donnees envoyees (manuel): Température: {temperature}°C, Humidité: {humidite}%")
             else:
                 temp_valeur.config(text=f"Erreur température manuelle", fg="orange") 
 
