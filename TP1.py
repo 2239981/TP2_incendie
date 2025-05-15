@@ -20,87 +20,111 @@ import paho.mqtt.client as mqtt
 global client
 client = None
 
+# Token et URL pour ThingsBoard
 THINGSBOARD_TOKEN = "5hfL5KZHLKkbDdolo1Vr" 
 THINGSBOARD_URL = f"http://thingsboard.cloud/api/v1/{THINGSBOARD_TOKEN}"
 HEADERS = {'Content-Type': 'application/json'}
 
-GPIO.setmode(GPIO.BCM)
-DHTPin = 17
-PortePin = 18
-AlarmePin = 23
-LED_Pin = 24
 
-# === Initialisations ===
+GPIO.setmode(GPIO.BCM)
+
+
+DHTPin = 17       # Capteur DHT11
+PortePin = 18     # Servo moteur de la porte
+AlarmePin = 23    # Buzzer d’alarme
+LED_Pin = 24      # LED indicatrice
+
+
 led = LED(LED_Pin)
 buzzer = Buzzer(AlarmePin)
 servo = Servo(PortePin)
+
+# Initialisation du capteur DHT11
 dht_device = adafruit_dht.DHT11(board.D17)
 
+# Initialisation Firebase avec clé JSON et URL base de données
 cred = credentials.Certificate("/home/thoma/Downloads/firebase-key.json")
 firebase_admin.initialize_app(cred, {
     'databaseURL': 'https://projet2-a895e-default-rtdb.firebaseio.com/'
 })
 
-mode_test_actif = False
-alarme_active = False
-temperature_manuelle = None
-porte_manuellement = False
-etat_servo_actuel = None
+# Variables d’état globales
+mode_test_actif = False          # Indique si le mode test est activé
+alarme_active = False            # Indique si l’alarme est active
+temperature_manuelle = None      # Température forcée en mode test
+porte_manuellement = False       # Etat manuel porte 
+etat_servo_actuel = None         
 
-derniere_temperature_capteur = None
-derniere_hum_capteur = None
+derniere_temperature_capteur = None  # Dernière température mesurée
+derniere_hum_capteur = None           # Dernière humidité mesurée
+
 
 # ========== Synchronisation avec ThingsBoard ==========
-def get_test_mode_from_thingsboard():
+def get_test_mode_from_thingsboard(): # Aider par chatGPT
     global mode_test_actif
     try:
+
         response = requests.get(f"{THINGSBOARD_URL}/attributes", headers=HEADERS)
         if response.status_code == 200:
+
             data = response.json()
+            # Récupération du champ "monNouveauMode" dans la partie "shared" (attributs partagés)
             mode = data.get("shared", {}).get("monNouveauMode", False) 
-            mode_test_actif = mode
+            mode_test_actif = mode  
     except Exception as e:
         print(f"Error getting testMode from ThingsBoard: {e}")
+
 
 def get_mode_test():
     global mode_test_actif
     return mode_test_actif
 
-def set_mode_test(nouvel_etat):# Aider par internet
+
+def set_mode_test(nouvel_etat): # Aider par chatGPT
     global mode_test_actif
     if isinstance(nouvel_etat, bool):
-        mode_test_actif = nouvel_etat
-        mettre_a_jour_interface_mode_test()
+        mode_test_actif = nouvel_etat 
+        mettre_a_jour_interface_mode_test() 
+
         if not nouvel_etat:
+            # Si on désactive le mode test, on réinitialise la température manuelle
             temperature_manuelle = None
-            mettre_a_jour_affichage_manuel()
+            mettre_a_jour_affichage_manuel()  # Mise à jour de l'affichage de la température
+
+        # Aider par chatGPT
         if client and client.is_connected():
             payload = json.dumps({"monNouveauMode": mode_test_actif})
             result = client.publish("v1/devices/me/attributes/update", payload, qos=0)
-        
+
+
 def mettre_a_jour_interface_mode_test():
     global mode_test_label, mode_test_actif, style
     mode_test_label.config(
         text=f"Mode Test : {'Activé' if mode_test_actif else 'Désactivé'}", fg="blue"
     )
+    # Active ou désactive la couleur noire des boutons selon le mode test (actif ou non)
     style.configure("GreenButton.TButton", foreground="black" if mode_test_actif else "grey")
     style.configure("RedButton.TButton", foreground="black" if mode_test_actif else "grey")
-    print(f"Interface mise à jour : texte du label = {mode_test_label.cget('text')}")   
-    
+    print(f"Interface mise à jour : texte du label = {mode_test_label.cget('text')}")
+
+
 def mettre_a_jour_affichage_manuel():
     global temperature_manuelle, temp_valeur, humidite_manuelle, humidite_valeur, mode_test_actif
     global derniere_temperature_capteur
-    
+
     if mode_test_actif:
+        # Si mode test activé et température manuelle définie, affiche la température manuelle en rouge
         if temperature_manuelle is not None:
             temp_valeur.config(text=f"{temperature_manuelle}°C", fg="red")
     else:
+        # Si mode test désactivé
         if temperature_manuelle is None:
+            # Affiche la dernière température mesurée par le capteur
             if derniere_temperature_capteur is not None:
                 temp_valeur.config(text=f"{derniere_temperature_capteur}", fg="red")
-
         else:
-             temp_valeur.config(text=f"{derniere_temperature_capteur}", fg="red")
+            temp_valeur.config(text=f"{derniere_temperature_capteur}", fg="red")
+
 
 # ========== Envoi vers ThingsBoard ==========
 def envoyer_donnees_vers_thingsboard(temperature, humidite):
@@ -112,46 +136,57 @@ def envoyer_donnees_vers_thingsboard(temperature, humidite):
         print(f"❌ Exception TB : {e}")
 
 # ========== Lecture du capteur ==========
-def lire_temperature_et_humidite():
-    for _ in range(3):
-        try:
-            return dht_device.temperature, dht_device.humidity
-        except RuntimeError as e:
-            print(f"DHT11 erreur : {e}")
-            time.sleep(1)
-    return None, None
-
-# ========== Gestion de l’alarme ==========
-def alarme(temperature):
+ef alarme(temperature):
+    """
+    Active ou désactive l'alarme en fonction de la température mesurée.
+    Lorsque la température dépasse 25°C, l'alarme s'active :
+      - Allume la LED
+      - Active le buzzer
+      - Ouvre la trappe via le servo
+      - Met à jour l'interface Tkinter
+      - Envoie les états via MQTT à ThingsBoard
+    Quand la température redescend sous 25°C, l'alarme se désactive avec les actions inverses.
+    """
     global alarme_active
- 
+
     if temperature >= 25:
-        if not alarme_active:
+        if not alarme_active:  # Si l'alarme n'était pas déjà activée
             alarme_active = True
-            led.on()
-            buzzer.on()
-            trappe_label.config(text="Trappe : Ouverte")
-            servo.max()
-            if client and client.is_connected():# Aider par internet
-                client.publish("v1/devices/me/attributes", json.dumps({
-                    "ledState": True,
-                    "buzzerState": True,
-                    "buttonState": True
-                }))
+            led.on()           # Allume la LED
+            buzzer.on()        # Active le buzzer sonore
+            trappe_label.config(text="Trappe : Ouverte")  # Mise à jour de l'interface
+            servo.max()        # Positionne le servo pour ouvrir la trappe
+
+            # Aider par chatGPT
+            if client and client.is_connected():
+                client.publish(
+                    "v1/devices/me/attributes",
+                    json.dumps({
+                        "ledState": True,
+                        "buzzerState": True,
+                        "buttonState": True
+                    })
+                )
                 print("✅ Alarme activée")
+
     else:
-        if alarme_active:
+        if alarme_active:  # Si l'alarme était activée et qu'il faut la désactiver
             alarme_active = False
-            led.off()
-            buzzer.off()
-            trappe_label.config(text="Trappe : Fermée")
-            servo.min()
-            if client and client.is_connected(): # Aider par internet
-                client.publish("v1/devices/me/attributes", json.dumps({
-                    "ledState": False,
-                    "buzzerState": False,
-                    "buttonState": False
-                }))
+            led.off()          # Éteindre la LED
+            buzzer.off()       # Désactive le buzzer
+            trappe_label.config(text="Trappe : Fermée")  # Mise à jour de l'interface
+            servo.min()        # Positionne le servo pour fermer la trappe
+
+       # Aider par chatGPT
+            if client and client.is_connected():
+                client.publish(
+                    "v1/devices/me/attributes",
+                    json.dumps({
+                        "ledState": False,
+                        "buzzerState": False,
+                        "buttonState": False
+                    })
+                )
                 print("✅ Alarme désactivée")
 
 # ========== Base de données ==========
@@ -199,23 +234,25 @@ def update_temp():
     global temperature_manuelle, humidite_manuelle
     global temp_valeur, humidite_valeur
     global derniere_temperature_capteur, derniere_hum_capteur
+
     temperature = None
     humidite = None
- 
-    if get_mode_test():
+
+    if get_mode_test():  # Si on est en mode test manuel activé
         if temperature_manuelle is None:
+            # Pas de température manuelle définie, on lit les valeurs réelles du capteur
             temperature, humidite = lire_temperature_et_humidite()
             if temperature is not None and humidite is not None:
-                derniere_temperature_capteur = temperature_manuelle
-                derniere_humidite_capteur = humidite
-                temp_valeur.config(text=f"{temperature}°C", fg="red")
-                alarme(temperature)
-                enregistrer_donnees(temperature, humidite)
+                derniere_temperature_capteur = temperature
+                derniere_hum_capteur = humidite
+                temp_valeur.config(text=f"{temperature}°C", fg="red")  
+                alarme(temperature)  # Vérifie si l'alarme doit être activée/désactivée
+                enregistrer_donnees(temperature, humidite)  # Enregistre les données
                 print(f"Donnees envoyees : Température: {temperature}°C, Humidité: {humidite}%")
             else:
                 temp_valeur.config(text=f"Chargement ... ", fg="red")
- 
         else:
+            # Température manuelle définie,
             temperature = temperature_manuelle
             _, humidite = lire_temperature_et_humidite()
             if temperature is not None:
@@ -223,9 +260,10 @@ def update_temp():
                 alarme(temperature)
                 print(f"Donnees envoyees (manuel): Température: {temperature}°C")
             else:
-                temp_valeur.config(text=f"Erreur température manuelle", fg="orange")
- 
+                temp_valeur.config(text=f"Erreur température manuelle", fg="orange") 
+
     else:
+        # Mode normal : lecture classique depuis le capteur DHT11
         temperature, humidite = lire_temperature_et_humidite()
         if temperature is not None and humidite is not None:
             derniere_temperature_capteur = temperature
@@ -235,8 +273,8 @@ def update_temp():
             enregistrer_donnees(temperature, humidite)
             print(f"Donnees envoyees : Température: {temperature}°C, Humidité: {humidite}%")
         else:
-            temp_valeur.config(text=f"Chargement ... ", fg="red")
- 
+            temp_valeur.config(text=f"Chargement ... ", fg="red") 
+
     window.after(15000, update_temp)
 
 # ========== Interface ==========
@@ -321,10 +359,10 @@ def arreter_alarme():
     client.publish("v1/devices/me/attributes", json.dumps({"ledState": False, "buzzerState": False,"buttonState": False }))
 
 
-def mqtt_on_connect(client_instance, userdata, flags, rc):
+def mqtt_on_connect(client_instance, userdata, flags, rc):# Aider par internet et chatgpt
     global client  
     print(f"Connecte a Thingboard avec le code {rc}")
-    if rc == 0:# Aider par internet
+    if rc == 0:
         client = client_instance 
         client.subscribe("v1/devices/me/rpc/request/+")
         client.subscribe("v1/devices/me/attributes/response")
@@ -332,24 +370,34 @@ def mqtt_on_connect(client_instance, userdata, flags, rc):
     else:
         print(f"Erreur de connexion MQTT : {rc}")
         
-def mqtt_on_attribute_update(client, userdata, msg):# Aider par internet
+def mqtt_on_attribute_update(client, userdata, msg):# Fait par chatGPT
     try:
         data = json.loads(msg.payload)
+        # Vérifie si l'attribut 'monNouveauMode' est présent dans les données reçues
         if "monNouveauMode" in data:
             global mode_test_actif, temperature_manuelle
+            # Met à jour la variable globale selon la valeur reçue
             mode_test_actif = data["monNouveauMode"]
+
             if not mode_test_actif:
+                # Si mode test désactivé, on réinitialise la température manuelle
                 temperature_manuelle = None
-                mettre_a_jour_affichage_manuel() 
+                # Mise à jour de l'affichage manuel
+                mettre_a_jour_affichage_manuel()
             else:
-                mettre_a_jour_affichage_manuel()     
+                # Si mode test activé, on met à jour l'affichage manuel
+                mettre_a_jour_affichage_manuel()
+            
+            # Mise à jour de l'interface graphique du mode test
             mettre_a_jour_interface_mode_test()
+            
     except json.JSONDecodeError as e:
         print(f"MQTT - Erreur de décodage JSON : {e}")
+
     
 
 
-def mqtt_on_message(client, userdata, msg):
+def mqtt_on_message(client, userdata, msg): # exemple de code prix depuis les documents
     try:
         data = json.loads(msg.payload)
         method = data.get("method")
@@ -389,36 +437,26 @@ def mqtt_on_message(client, userdata, msg):
                 ajuster_temperature(1)
                 print("MQTT - Température augmentée")
                 client.publish(f"v1/devices/me/rpc/response/{request_id}", json.dumps({"success": True}))
-            else:
-                client.publish(f"v1/devices/me/rpc/response/{request_id}", json.dumps({"error": "Mode test inactif"}))
 
         elif method == "Diminuertemperature":
             if mode_test_actif:
                 ajuster_temperature(-1)
                 print("MQTT - Température diminuée")
                 client.publish(f"v1/devices/me/rpc/response/{request_id}", json.dumps({"success": True}))
-            else:
-                client.publish(f"v1/devices/me/rpc/response/{request_id}", json.dumps({"error": "Mode test inactif"}))
 
-            print(f"Mode Test Actif ? {mode_test_actif}, Température manuelle : {temperature_manuelle}")
+            
+            
         elif method == "ouvrirPorte":
            if mode_test_actif:
                ouvrir_porte()
                trappe_label.config(text="Trappe : Ouverte")
                client.publish(f"v1/devices/me/rpc/response/{request_id}", json.dumps({"success": True}))
-           else:
-               client.publish(f"v1/devices/me/rpc/response/{request_id}", json.dumps({"error": "Mode test inactif"}))
 
         elif method == "fermerPorte":
            if mode_test_actif:
                fermer_porte()
                trappe_label.config(text="Trappe : Fermer")
                client.publish(f"v1/devices/me/rpc/response/{request_id}", json.dumps({"success": True}))
-           else:
-               client.publish(f"v1/devices/me/rpc/response/{request_id}", json.dumps({"error": "Mode test inactif"}))
-
-        else:
-            client.publish(f"v1/devices/me/rpc/response/{request_id}", json.dumps({"error": "Méthode inconnue"}))
 
     except Exception as e:
         print("MQTT - Erreur RPC:", e)
